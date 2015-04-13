@@ -50,6 +50,19 @@ public:
 static CBaseRegTestParams regTestParams;
 
 /*
+ * NewHashType test
+ */
+class CBaseNewHashTypeParams : public CBaseTestNetParams
+{
+public:
+    CBaseNewHashTypeParams()
+    {
+        strDataDir = "newhashtype";
+    }
+};
+static CBaseNewHashTypeParams newHashTypeParams;
+
+/*
  * Unit test
  */
 class CBaseUnitTestParams : public CBaseMainParams
@@ -61,6 +74,8 @@ public:
     }
 };
 static CBaseUnitTestParams unitTestParams;
+
+////////////////////////////////////////
 
 static CBaseChainParams* pCurrentBaseParams = 0;
 
@@ -82,6 +97,9 @@ void SelectBaseParams(CBaseChainParams::Network network)
     case CBaseChainParams::REGTEST:
         pCurrentBaseParams = &regTestParams;
         break;
+    case CBaseChainParams::NEWHASHTYPE:
+        pCurrentBaseParams = &newHashTypeParams;
+        break;
     default:
         assert(false && "Unimplemented network");
         return;
@@ -92,13 +110,18 @@ CBaseChainParams::Network NetworkIdFromCommandLine()
 {
     bool fRegTest = GetBoolArg("-regtest", false);
     bool fTestNet = GetBoolArg("-testnet", false);
+    bool fNewHash = GetBoolArg("-newhashtype", false);
 
-    if (fTestNet && fRegTest)
+    int nCount = (fRegTest ? 1 : 0) + (fTestNet ? 1 : 0) + (fNewHash ? 1 : 0);
+
+    if (nCount > 1)
         return CBaseChainParams::MAX_NETWORK_TYPES;
     if (fRegTest)
         return CBaseChainParams::REGTEST;
     if (fTestNet)
         return CBaseChainParams::TESTNET;
+    if (fNewHash)
+        return CBaseChainParams::NEWHASHTYPE;
     return CBaseChainParams::MAIN;
 }
 

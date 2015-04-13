@@ -97,6 +97,17 @@ static const Checkpoints::CCheckpointData dataRegtest = {
         0
     };
 
+static Checkpoints::MapCheckpoints mapCheckpointsNewHashType =
+        boost::assign::map_list_of
+        ( 0, uint256S("0x1203dc9f1ee932d4f901f225525d2409ec25e6691aecc8141d82b0a41e0caa5e"))
+        ;
+static const Checkpoints::CCheckpointData dataNewHashType = {
+        &mapCheckpointsNewHashType,
+        0,
+        0,
+        0
+    };
+
 class CMainParams : public CChainParams {
 public:
     CMainParams() {
@@ -171,6 +182,7 @@ public:
         fRequireStandard = true;
         fMineBlocksOnDemand = false;
         fTestnetToBeDeprecatedFieldRPC = false;
+        fUseNewHashType = false;
     }
 
     const Checkpoints::CCheckpointData& Checkpoints() const 
@@ -226,6 +238,7 @@ public:
         fRequireStandard = false;
         fMineBlocksOnDemand = false;
         fTestnetToBeDeprecatedFieldRPC = true;
+        fUseNewHashType = false;
     }
     const Checkpoints::CCheckpointData& Checkpoints() const 
     {
@@ -267,6 +280,7 @@ public:
         fRequireStandard = false;
         fMineBlocksOnDemand = true;
         fTestnetToBeDeprecatedFieldRPC = false;
+        fUseNewHashType = false;
     }
     const Checkpoints::CCheckpointData& Checkpoints() const 
     {
@@ -274,6 +288,55 @@ public:
     }
 };
 static CRegTestParams regTestParams;
+
+/**
+ * Regression test
+ */
+class CNewHashTypeParams : public CTestNetParams {
+public:
+    CNewHashTypeParams() {
+        strNetworkID = "newhashtype";
+        consensus.nSubsidyHalvingInterval = 150;
+        consensus.nMajorityEnforceBlockUpgrade = 750;
+        consensus.nMajorityRejectBlockOutdated = 950;
+        consensus.nMajorityWindow = 1000;
+        consensus.powLimit = ~arith_uint256(0) >> 1;
+        pchMessageStart[0] = 0xba;
+        pchMessageStart[1] = 0xf3;
+        pchMessageStart[2] = 0x75;
+        pchMessageStart[3] = 0xd7;
+        nMinerThreads = 1;
+        genesis.nTime = 1428901285;
+        genesis.nBits = 0x207fffff;
+        genesis.nNonce = 1;
+
+        // std::cout << genesis.nTime << std::endl;
+        // std::cout << genesis.GetHash().ToString() << std::endl;
+
+        consensus.hashGenesisBlock = genesis.GetHash();
+        nDefaultPort = 13456;
+        assert(consensus.hashGenesisBlock == uint256S("0x1203dc9f1ee932d4f901f225525d2409ec25e6691aecc8141d82b0a41e0caa5e"));
+
+        vFixedSeeds.clear(); //! Regtest mode doesn't have any fixed seeds.
+        vSeeds.clear();  //! Regtest mode doesn't have any DNS seeds.
+
+        fRequireRPCPassword = false;
+        fMiningRequiresPeers = false;
+        fDefaultConsistencyChecks = true;
+        fRequireStandard = false;
+        fMineBlocksOnDemand = true;
+        fTestnetToBeDeprecatedFieldRPC = false;
+        fUseNewHashType = true;
+    }
+    const Checkpoints::CCheckpointData& Checkpoints() const 
+    {
+        return dataNewHashType;
+    }
+};
+static CNewHashTypeParams newHashTypeParams;
+
+
+//////////////////////////////
 
 static CChainParams *pCurrentParams = 0;
 
@@ -290,6 +353,8 @@ CChainParams &Params(CBaseChainParams::Network network) {
             return testNetParams;
         case CBaseChainParams::REGTEST:
             return regTestParams;
+        case CBaseChainParams::NEWHASHTYPE:
+            return newHashTypeParams;
         default:
             assert(false && "Unimplemented network");
             return mainParams;

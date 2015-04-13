@@ -19,6 +19,7 @@ public:
         MAIN,
         TESTNET,
         REGTEST,
+        NEWHASHTYPE,
 
         MAX_NETWORK_TYPES
     };
