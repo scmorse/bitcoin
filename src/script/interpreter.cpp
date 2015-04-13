@@ -177,13 +177,31 @@ bool static IsLowDERSignature(const valtype &vchSig, ScriptError* serror) {
     return true;
 }
 
-bool static IsDefinedHashtypeSignature(const valtype &vchSig) {
-    if (vchSig.size() == 0) {
+unsigned short static inline ReadConfigurableHashType(const valtype &vchSig) {
+    assert(vchSig.size() > 1);
+    unsigned short nHashType = (unsigned short)vchSig[vchSig.size() - 1];
+    nHashType = (nHashType << 8) | (unsigned short)vchSig[vchSig.size() - 2];
+    return nHashType;
+}
+
+bool static IsDefinedHashtypeSignature(const valtype &vchSig, bool fUseNewHashTypes) {
+    if (vchSig.size() < (fUseNewHashTypes ? 2 : 1)) {
         return false;
     }
-    unsigned char nHashType = vchSig[vchSig.size() - 1] & (~(SIGHASH_ANYONECANPAY));
-    if (nHashType < SIGHASH_ALL || nHashType > SIGHASH_SINGLE)
-        return false;
+
+    if (!fUseNewHashTypes) {
+        unsigned char nHashType = vchSig[vchSig.size() - 1] & (~(SIGHASH_ANYONECANPAY));
+        if (nHashType < SIGHASH_ALL || nHashType > SIGHASH_SINGLE)
+            return false;
+    } else {
+        unsigned short nHashType = ReadConfigurableHashType(vchSig);
+
+        // Cannot leave two least significan bits empty, allows for malleability
+        if ((nHashType & SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY) == 0)
+            return false;
+        if ((nHashType & SIGHASH_WITHOUT_PREV_VALUE) == 0)
+            return false;
+    }
 
     return true;
 }
@@ -199,7 +217,7 @@ bool static CheckSignatureEncoding(const valtype &vchSig, unsigned int flags, Sc
     } else if ((flags & SCRIPT_VERIFY_LOW_S) != 0 && !IsLowDERSignature(vchSig, serror)) {
         // serror is set
         return false;
-    } else if ((flags & SCRIPT_VERIFY_STRICTENC) != 0 && !IsDefinedHashtypeSignature(vchSig)) {
+    } else if ((flags & SCRIPT_VERIFY_STRICTENC & SCRIPT_VERIFY_USE_CONFIGURABLE_HASH_TYPES) != 0 && !IsDefinedHashtypeSignature(vchSig, flags & SCRIPT_VERIFY_USE_CONFIGURABLE_HASH_TYPES)) {
         return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
     }
     return true;
@@ -938,23 +956,15 @@ namespace {
 
 /**
  * Wrapper that serializes like CTransaction, but with the modifications
- *  required for the signature hash done in-place
+ * required for the signature hash done in-place
  */
-class CTransactionSignatureSerializer {
-private:
+class CBaseTransactionSignatureSerializer {
+protected:
     const CTransaction &txTo;  //! reference to the spending transaction (the one being serialized)
     const CScript &scriptCode; //! output script being consumed
-    const unsigned int nIn;    //! input index of txTo being signed
-    const bool fAnyoneCanPay;  //! whether the hashtype has the SIGHASH_ANYONECANPAY flag set
-    const bool fHashSingle;    //! whether the hashtype is SIGHASH_SINGLE
-    const bool fHashNone;      //! whether the hashtype is SIGHASH_NONE
 
 public:
-    CTransactionSignatureSerializer(const CTransaction &txToIn, const CScript &scriptCodeIn, unsigned int nInIn, int nHashTypeIn) :
-        txTo(txToIn), scriptCode(scriptCodeIn), nIn(nInIn),
-        fAnyoneCanPay(!!(nHashTypeIn & SIGHASH_ANYONECANPAY)),
-        fHashSingle((nHashTypeIn & 0x1f) == SIGHASH_SINGLE),
-        fHashNone((nHashTypeIn & 0x1f) == SIGHASH_NONE) {}
+    CTransactionSignatureSerializer(const CTransaction &txToIn, const CScript &scriptCodeIn) {}
 
     /** Serialize the passed scriptCode, skipping OP_CODESEPARATORs */
     template<typename S>
@@ -978,6 +988,25 @@ public:
         if (itBegin != scriptCode.end())
             s.write((char*)&itBegin[0], it-itBegin);
     }
+};
+
+/**
+ * Wrapper that serializes like CTransaction, but with the modifications
+ * required for the signature hash done in-place
+ */
+class CTransactionSignatureSerializer : CBaseTransactionSignatureSerializer {
+private:
+    const unsigned int nIn;    //! input index of txTo being signed
+    const bool fAnyoneCanPay;  //! whether the hashtype has the SIGHASH_ANYONECANPAY flag set
+    const bool fHashSingle;    //! whether the hashtype is SIGHASH_SINGLE
+    const bool fHashNone;      //! whether the hashtype is SIGHASH_NONE
+
+public:
+    CTransactionSignatureSerializer(const CTransaction &txToIn, const CScript &scriptCodeIn, unsigned int nInIn, int nHashTypeIn) :
+        txTo(txToIn), scriptCode(scriptCodeIn), nIn(nInIn),
+        fAnyoneCanPay(!!(nHashTypeIn & SIGHASH_ANYONECANPAY)),
+        fHashSingle((nHashTypeIn & 0x1f) == SIGHASH_SINGLE),
+        fHashNone((nHashTypeIn & 0x1f) == SIGHASH_NONE) {}
 
     /** Serialize an input of txTo */
     template<typename S>
@@ -1028,6 +1057,127 @@ public:
              SerializeOutput(s, nOutput, nType, nVersion);
         // Serialize nLockTime
         ::Serialize(s, txTo.nLockTime, nType, nVersion);
+    }
+};
+
+/**
+ * Wrapper that serializes like CTransaction, but with the modifications
+ * required for completely configurable signature hash done in-place.
+ */
+class CConfigurableTransactionSignatureSerializer : CBaseTransactionSignatureSerializer{
+private:
+    const CAmount nValue;      //! nValue of ouptut being consumed
+    const unsigned int nIn;    //! input index of txTo being signed
+    const int nHashType;       //! nHashType determines logic of serialization
+
+public:
+    CConfigurableTransactionSignatureSerializer(const CTransaction &txToIn, const CScript &scriptCodeIn, CAmount nValueIn, unsigned int nInIn, int nHashTypeIn) :
+        txTo(txToIn), scriptCode(scriptCodeIn), nValue(nValueIn), nIn(nInIn), nHashType(nHashTypeIn) {
+        assert((nHashType & SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY) != 0);
+        assert((nHashType & SIGHASH_WITHOUT_PREV_VALUE) != 0);
+    }
+
+    int PartialHashType(unsigned int nIndex) {
+        // Assume SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY and SIGHASH_WITHOUT_PREV_VALUE true for other inputs
+        return (nIndex == nIn) ? (nHashType >> 7) : (nHashType);
+    }
+
+    /** Serialize an input of txTo */
+    template<typename S>
+    void SerializeInput(S &s, unsigned int nInput, int nType, int nVersion) const {
+        int currHashType = PartialHashType(nInput);
+
+        // Serialize the prevout
+        if (!(currHashType & SIGHASH_WITHOUT_INPUT_TXID))
+            ::Serialize(s, txTo.vin[nInput].prevout.hash, nType, nVersion);
+
+        if (!(currHashType & SIGHASH_WITHOUT_INPUT_INDEX))
+            ::Serialize(s, txTo.vin[nInput].prevout.n, nType, nVersion);
+
+        if (!(currHashType & SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY))
+            SerializeScriptCode(s, nType, nVersion);
+        else
+            // Blank out other inputs' signatures
+            ::Serialize(s, CScript(), nType, nVersion);
+
+        if (!(currHashType & SIGHASH_WITHOUT_PREV_VALUE))
+            ::Serialize(s, nValue, nType, nVersion);
+
+        if (!(currHashType & SIGHASH_WITHOUT_INPUT_SEQUENCE))
+            ::Serialize(s, txTo.vin[nInput].nSequence, nType, nVersion);
+    }
+
+    /** Serialize an output of txTo */
+    template<typename S>
+    void SerializeOutput(S &s, unsigned int nOutput, int nType, int nVersion) const {
+        int currHashType = PartialHashType(nOutput);
+
+        if (!(currHashType & SIGHASH_WITHOUT_OUTPUT_VALUE))
+            ::Serialize(s, txTo.vout[nOutput].nValue, nType, nVersion);
+
+        if (!(currHashType & SIGHASH_WITHOUT_OUTPUT_SCRIPTPUBKEY))
+            ::Serialize(s, txTo.vout[nOutput].scriptPubKey, nType, nVersion);
+        else
+            ::Serialize(s, CScript(), nType, nVersion);
+    }
+
+    /** Serialize txTo */
+    template<typename S>
+    void Serialize(S &s, int nType, int nVersion) const {
+        // From most significant flags to least significant
+
+        int nAtIndex = PartialHashType(nIn);
+        int nAtOther = PartialHashType(nIn+1);
+
+        // Serialize nVersion
+        if (!(nHashType & SIGHASH_WITHOUT_TX_VERSION))
+            ::Serialize(s, txTo.nVersion, nType, nVersion);
+
+        // Serialize nLockTime - TODO maybe this should actually go near end?
+        if (!(nHashType & SIGHASH_WITHOUT_TX_LOCKTIME))
+            ::Serialize(s, txTo.nLockTime, nType, nVersion);
+
+        // Serialize 'other' outputs
+        unsigned int nOutputs = ((nAtOther & SIGHASH_WITHOUT_OUTPUT_SCRIPTPUBKEY) != 0) && 
+                                ((nAtOther & SIGHASH_WITHOUT_OUTPUT_VALUE)        != 0) ? 0 : txTo.vout.size();
+        ::WriteCompactSize(s, nOutputs);
+
+        for (unsigned int nOutput = 0; nOutput < nOutputs; nOutput++) {
+            SerializeOutput(s, nIn+1, nType, nVersion);
+        }
+
+        // Serialize 'other' inputs
+        unsigned int nInputs = ((nAtOther & SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY) != 0) && 
+                               ((nAtOther & SIGHASH_WITHOUT_PREV_VALUE)        != 0) &&
+                               ((nAtOther & SIGHASH_WITHOUT_INPUT_TXID)        != 0) &&
+                               ((nAtOther & SIGHASH_WITHOUT_INPUT_INDEX)       != 0) &&
+                               ((nAtOther & SIGHASH_WITHOUT_INPUT_SEQUENCE)    != 0) ? 0 : txTo.vin.size();
+        ::WriteCompactSize(s, nInputs);
+
+        for (unsigned int nInput = 0; nInput < nInputs; nInput++) {
+            SerializeInput(s, nIn+1, nType, nVersion);
+        }
+
+        // TODO take snapshot for common sighash types at this point
+
+        // Serialize 'this' output
+        unsigned int nOutputs = ((nAtIndex & SIGHASH_WITHOUT_OUTPUT_SCRIPTPUBKEY) != 0) && 
+                                ((nAtIndex & SIGHASH_WITHOUT_OUTPUT_VALUE)        != 0) ? 0 : 1;
+        ::WriteCompactSize(s, nOutputs);
+
+        for (unsigned int nOutput = 0; nOutput < nOutputs; nOutput++) {
+            SerializeOutput(s, nIn+1, nType, nVersion);
+        }
+
+
+
+        if (((nAtIndex & SIGHASH_WITHOUT_OUTPUT_SCRIPTPUBKEY) == 0) || 
+            ((nAtIndex & SIGHASH_WITHOUT_OUTPUT_VALUE)        == 0)) {
+            if (nIn < txTo.vout.size())
+
+        }
+
+
     }
 };
 

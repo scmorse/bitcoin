@@ -27,6 +27,34 @@ enum
     SIGHASH_ANYONECANPAY = 0x80,
 };
 
+/** Signature hash flags */
+enum
+{
+    // Input Specific
+    SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY     = 0x0001,
+    SIGHASH_WITHOUT_PREV_VALUE            = 0x0002,
+    SIGHASH_WITHOUT_INPUT_TXID            = 0x0004,
+    SIGHASH_WITHOUT_INPUT_INDEX           = 0x0008,
+    SIGHASH_WITHOUT_INPUT_SEQUENCE        = 0x0010,
+
+    // Output Specific
+    SIGHASH_WITHOUT_OUTPUT_SCRIPTPUBKEY   = 0x0020,
+    SIGHASH_WITHOUT_OUTPUT_VALUE          = 0x0040,
+
+    // Reserved for using the above flags at the currently executing index
+    //                                      0x0080
+    //                                      0x0100
+    //                                      0x0200
+    //                                      0x0400
+    //                                      0x0800
+    //                                      0x1000
+    //                                      0x2000
+
+    // Transaction specific fields
+    SIGHASH_WITHOUT_TX_LOCKTIME           = 0x4000,
+    SIGHASH_WITHOUT_TX_VERSION            = 0x8000,
+};
+
 /** Script verification flags */
 enum
 {
@@ -76,6 +104,9 @@ enum
     // (softfork safe, BIP62 rule 6)
     // Note: CLEANSTACK should never be used without P2SH.
     SCRIPT_VERIFY_CLEANSTACK = (1U << 8),
+
+    // https://github.com/scmorse/bitcoin-misc/blob/master/sighash_proposal_v2.md
+    SCRIPT_VERIFY_USE_CONFIGURABLE_HASH_TYPES = (1U << 9),
 };
 
 uint256 SignatureHash(const CScript &scriptCode, const CTransaction& txTo, unsigned int nIn, int nHashType);
